@@ -110,7 +110,7 @@ region_colors = {
     '제주도': '#4682B4'
 }
 
-## 시각화
+# 지역별 접근성 점수 비교 시각화
 # plt.figure(figsize=(8, 5))
 # sns.barplot(
 #     x='region',
@@ -120,10 +120,9 @@ region_colors = {
 #     palette=region_colors,
 #     legend=False
 # )
-
 # plt.title('지역별 접근성 점수 비교', fontsize=16, pad=20)
-# plt.xlabel('지역', fontsize=12)
-# plt.ylabel('접근성 점수', fontsize=12)
+# plt.xlabel('<지역>')
+# plt.ylabel('<접근성 점수>')
 # plt.xticks(fontsize=11)
 # plt.yticks(fontsize=11)
 # plt.tight_layout()
@@ -246,6 +245,15 @@ df_clean = df_map[df_map['region'] == df_map['region_by_coord']].copy()
 # 6. 위험 여부 컬럼 생성
 df_clean['is_risky'] = (df_clean['accessibility_score'] < 2.0) & (df_clean['safety_score'] < 1.5)
 
+# 6-1. 위험 유형 분류
+df_clean['risk_type'] = df_clean.apply(
+    lambda row: '접근성만 낮음' if row['accessibility_score'] < 2.0 and row['safety_score'] >= 1.5 else
+                '안전성만 낮음' if row['accessibility_score'] >= 2.0 and row['safety_score'] < 1.5 else
+                '둘 다 낮음' if row['is_risky'] else '양호',
+    axis=1
+)
+# print(df_clean['risk_type'].value_counts())
+
 # 7. 위험 지점 필터링
 risk_df = df_clean[df_clean['is_risky']].copy()
 
@@ -327,17 +335,15 @@ district_summary = (
 )
 
 # 12. 위험 비율 시각화
+region_colors = ['#8B0000', '#CD5C5C', '#FA8072']
 
 # 위험 비율 기준으로 정렬
 risk_ratio_sorted = risk_ratio.sort_values(ascending=False)
 
-# 빨강 계열 색상 리스트 (위험도 높은 순서대로 진하게)
-colors = ['#8B0000', '#CD5C5C', '#FA8072']
-
-# 시각화
+# 지역별 위험 화장실 비율 시각화
 # plt.figure(figsize=(8, 5))
-# sns.barplot(x=risk_ratio_sorted.index, y=risk_ratio_sorted.values, palette=colors)
-# plt.title('지역별 위험 화장실 비율', fontsize=16)
+# sns.barplot(x=risk_ratio_sorted.index, y=risk_ratio_sorted.values, palette=region_colors)
+# plt.title('지역별 위험 화장실 비율', fontsize=16, pad=20)
 # plt.ylabel('<위험 비율>')
 # plt.xlabel('<지역>')
 # plt.ylim(0, 1)
@@ -351,6 +357,18 @@ critical_zones = district_summary[
     (district_summary['accessibility_score'] == 0.00) &
     (district_summary['safety_score'] <= 0.30)
 ]
+
+# 지역별 최우선 개선 대상 지점 수 시각화
+region_counts = critical_points['region'].value_counts()
+
+# plt.figure(figsize=(8, 5))
+# bars = plt.bar(region_counts.index, region_counts.values, color=region_colors)
+# plt.title('지역별 최우선 개선 대상 지점 수', fontsize=16, pad=20)
+# plt.xlabel('<지역>')
+# plt.ylabel('<지점 수>')
+# plt.xticks(rotation=0)
+# plt.tight_layout()
+# plt.show()
 
 # print("접근성·안전성 모두 낮은 구 (최우선 개선 대상):")
 # print(critical_points['region'].value_counts())
