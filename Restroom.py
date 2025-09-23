@@ -263,7 +263,7 @@ risk_ratio = risk_ratio[risk_ratio.index != '기타']
 
 # 9-1. 위험 지점 지도 생성
 risk_map = folium.Map(location=[36.0, 127.5], zoom_start=6)
-marker_cluster = MarkerCluster().add_to(risk_map)
+risk_cluster = MarkerCluster().add_to(risk_map)
 
 for _, row in risk_df.iterrows():
     name = row.get('toilet_name') or row.get('address_road', '주소 없음')
@@ -289,7 +289,7 @@ for _, row in risk_df.iterrows():
 
 # 9-2. 최우선 개선 대상 지도 (critical_points 기준)
 critical_map = folium.Map(location=[36.0, 127.5], zoom_start=6)
-marker_cluster = MarkerCluster().add_to(critical_map)
+critical_cluster = MarkerCluster().add_to(critical_map)
 
 for _, row in critical_points.iterrows():
     name = row.get('toilet_name') or row.get('address_road', '주소 없음')
