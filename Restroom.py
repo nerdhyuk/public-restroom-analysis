@@ -3,10 +3,48 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import folium
 from folium.plugins import MarkerCluster
+import requests
 import re
+import time
 import warnings
+import pickle
+
 warnings.simplefilter("ignore")
 
+# Kakao API 키 입력
+KAKAO_API_KEY = 'f7c14e0af56202194b7f0f1c3bd830f6'
+
+# 캐시 불러오기
+try:
+    with open('address_cache.pkl', 'rb') as f:
+        address_cache = pickle.load(f)
+except FileNotFoundError:
+    address_cache = {}
+
+# 좌표 변환 함수 (캐싱 포함)
+def cached_kakao_geocode(address):
+    if address in address_cache:
+        return address_cache[address]  # 이미 변환된 주소는 캐시에서 꺼냄
+
+    url = 'https://dapi.kakao.com/v2/local/search/address.json'
+    headers = {"Authorization": f"KakaoAK {KAKAO_API_KEY}"}
+    params = {"query": address}
+
+    try:
+        response = requests.get(url, headers=headers, params=params)
+        result = response.json()
+        if result['documents']:
+            lat = float(result['documents'][0]['y'])
+            lon = float(result['documents'][0]['x'])
+            address_cache[address] = pd.Series([lat, lon])  # 캐시에 저장
+            time.sleep(0.1)  # 너무 빠른 요청 방지
+            return pd.Series([lat, lon])
+        else:
+            address_cache[address] = pd.Series([None, None])
+            return pd.Series([None, None])
+    except:
+        address_cache[address] = pd.Series([None, None])
+        return pd.Series([None, None])
 
 # 파일 경로
 path = 'C:/Users/anton/restroom_data/'
@@ -30,6 +68,7 @@ rename_dict = {
     'WGS84위도': 'latitude',
     'WGS84경도': 'longitude',
     '소재지도로명주소': 'address_road',
+    '소재지지번주소': 'address_lot',
     # 안전성 관련
     '비상벨설치여부': 'emergency_bell_installed',
     '비상벨설치장소': 'emergency_bell_location',
@@ -44,6 +83,22 @@ for df, region in zip([seoul_df, busan_df, jeju_df], ['서울', '부산', '제�
 
 # 데이터 통합
 df = pd.concat([seoul_df, busan_df, jeju_df], ignore_index=True)
+
+# 주소 결합 함수
+def get_full_address(row):
+    road = row.get('address_road', '')
+    lot = row.get('address_lot', '')
+    return road if road else lot
+
+# 주소 결합
+df['full_address'] = df.apply(get_full_address, axis=1)
+
+# 좌표 변환 (캐싱 방식 적용)
+df[['latitude', 'longitude']] = df['full_address'].apply(cached_kakao_geocode)
+
+# 캐시 저장
+with open('address_cache.pkl', 'wb') as f:
+    pickle.dump(address_cache, f)
 
 # 접근성 점수 계산
 df['accessibility_score'] = (
@@ -170,8 +225,7 @@ df_clean = df_map[df_map['region'] == df_map['region_by_coord']].copy()
 df_map = df_map[df_map['region'] == df_map['region_by_coord']]
 
 # 3. 지도 생성
-map_center = [37.5665, 126.9780]  # 서울 시청 기준
-restroom_map = folium.Map(location=map_center, zoom_start=11)
+restroom_map = folium.Map(location=[36.0, 127.5], zoom_start=7)
 marker_cluster = MarkerCluster().add_to(restroom_map)
 
 # 4. 색상 함수 (접근성 점수 기준)
@@ -210,7 +264,7 @@ for _, row in df_map.iterrows():
     ).add_to(marker_cluster)
 
 # 6. 지도 저장
-# restroom_map.save('restroom_map_clean.html')
+restroom_map.save('restroom_map_clean.html')
 
 
 
@@ -254,6 +308,19 @@ df_clean['risk_type'] = df_clean.apply(
 )
 # print(df_clean['risk_type'].value_counts())
 
+# 6-2. 위험 유형별 개선 전략 추천
+def recommend_strategy(row):
+    if row['risk_type'] == '접근성만 낮음':
+        return '진입로 개선, 장애인 접근성 강화'
+    elif row['risk_type'] == '안전성만 낮음':
+        return '조명, CCTV, 주변 환경 정비'
+    elif row['risk_type'] == '둘 다 낮음':
+        return '종합 인프라 개선 필요'
+    else:
+        return '유지관리 중심'
+
+df_clean['recommendation'] = df_clean.apply(recommend_strategy, axis=1)
+
 # 7. 위험 지점 필터링
 risk_df = df_clean[df_clean['is_risky']].copy()
 
@@ -270,7 +337,7 @@ risk_ratio = risk_ratio[risk_ratio.index != '기타']
 # print(risk_ratio)
 
 # 9-1. 위험 지점 지도 생성
-risk_map = folium.Map(location=[36.0, 127.5], zoom_start=6)
+risk_map = folium.Map(location=[36.0, 127.5], zoom_start=7)
 risk_cluster = MarkerCluster().add_to(risk_map)
 
 for _, row in risk_df.iterrows():
@@ -279,24 +346,31 @@ for _, row in risk_df.iterrows():
     district = row.get('district', '구 정보 없음')
     acc = row['accessibility_score']
     safe = row['safety_score']
+    strategy = row.get('recommendation', '전략 없음')  # 전략 팝업에 추가
 
     popup_text = f"""
     <b>{name}</b><br>
     📍 {region} / {district}<br>
     🚻 접근성 점수: {acc}<br>
-    🛡️ 안전성 점수: {safe}
+    🛡️ 안전성 점수: {safe}<br>
+    🛠️ 개선 전략: {strategy}
     """
 
     folium.Marker(
         location=[row['latitude'], row['longitude']],
         popup=folium.Popup(popup_text, max_width=300),
         icon=folium.Icon(color='red', icon='exclamation-sign')
-    ).add_to(marker_cluster)
+    ).add_to(risk_cluster)
 
+# 지도 저장
 # risk_map.save('risk_restroom_map.html')
 
+
+import folium
+from folium.plugins import MarkerCluster
+
 # 9-2. 최우선 개선 대상 지도 (critical_points 기준)
-critical_map = folium.Map(location=[36.0, 127.5], zoom_start=6)
+critical_map = folium.Map(location=[36.0, 127.5], zoom_start=7)
 critical_cluster = MarkerCluster().add_to(critical_map)
 
 for _, row in critical_points.iterrows():
@@ -305,20 +379,23 @@ for _, row in critical_points.iterrows():
     district = row.get('district', '구 정보 없음')
     acc = row['accessibility_score']
     safe = row['safety_score']
+    strategy = row.get('recommendation', '전략 없음')  # 전략 팝업에 추가 가능
 
     popup_text = f"""
     <b>{name}</b><br>
     📍 {region} / {district}<br>
     🚻 접근성 점수: {acc}<br>
-    🛡️ 안전성 점수: {safe}
+    🛡️ 안전성 점수: {safe}<br>
+    🛠️ 개선 전략: {strategy}
     """
 
     folium.Marker(
         location=[row['latitude'], row['longitude']],
         popup=folium.Popup(popup_text, max_width=300),
         icon=folium.Icon(color='darkred', icon='exclamation-sign')
-    ).add_to(marker_cluster)
+    ).add_to(critical_cluster)
 
+# 지도 저장
 # critical_map.save('critical_points_map.html')
 
 # 10. 지역별 위험도 요약
@@ -367,6 +444,10 @@ region_counts = critical_points['region'].value_counts()
 # plt.xlabel('<지역>')
 # plt.ylabel('<지점 수>')
 # plt.xticks(rotation=0)
+# for bar in bars:
+#     height = bar.get_height()
+#     plt.text(bar.get_x() + bar.get_width()/2, height + 2, f'{int(height)}',
+#              ha='center', va='bottom', fontsize=11)
 # plt.tight_layout()
 # plt.show()
 
