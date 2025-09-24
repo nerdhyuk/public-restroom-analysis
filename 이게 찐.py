@@ -19,9 +19,8 @@ jeju_df = pd.read_excel(path + '제주도_공중화장실정보.xlsx')
 
 # 주소 통합 (도로명 + 지번 주소)
 def combine_address(row):
-    road = str(row.get('address_road', '')).strip()
-    lot = str(row.get('address_lot', '')).strip()
-    return f"{road} {lot}".strip()
+    parts = [row.get('region', ''), row.get('district', ''), row.get('address', '')]
+    return ' '.join([str(p) for p in parts if pd.notna(p)])
 
 # 컬럼명 영문화
 rename_dict = {
@@ -280,7 +279,7 @@ top_districts = metro_risk['district'].value_counts().head(10)
 
 # 제주도 위험 지점 추출
 jeju_risk = df[
-    (df['region'].str.contains('제주')) &
+    (df['region'] == '제주특별자치도') &
     (df['accessibility_score'] == 0) &
     (df['safety_score'] <= 1)
 ].copy()
@@ -362,4 +361,152 @@ palette = {
 “접근성 없는 화장실은 곧 안전도 없다”
 “도심과 관광지 모두, 공공시설의 기본부터 다시 설계해야 할 때"
 “위험 지점 수는 단순한 숫자가 아니라 시민의 불편과 불안의 총합입니다”
+'''
+
+
+# 비상벨 설치 여부
+bell_counts = df['emergency_bell_installed'].fillna(0).value_counts().sort_index()
+bell_labels = ['미설치', '설치']
+bell_colors = ['lightcoral', 'mediumseagreen']
+
+# 기저귀교환대 설치 여부
+diaper_counts = df['has_diaper_table'].fillna(0).value_counts().sort_index()
+diaper_labels = ['미설치', '설치']
+diaper_colors = ['lightskyblue', 'gold']
+
+def make_autopct(fontsize):
+    def my_autopct(pct):
+        return f'{pct:.1f}%'  # 퍼센트 포맷
+    return lambda pct: f'{my_autopct(pct)}'  # 람다로 반환
+
+fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+# 비상벨 설치 여부
+wedges1, texts1, autotexts1 = axes[0].pie(
+    bell_counts,
+    labels=bell_labels,
+    autopct=make_autopct(14),
+    startangle=90,
+    colors=bell_colors
+)
+axes[0].set_title('<비상벨 설치 여부>', fontsize=17, pad=0)
+
+# 텍스트 크기 조절
+for text in texts1:         # 바깥쪽 라벨
+    text.set_fontsize(12)
+for autotext in autotexts1: # 안쪽 퍼센트 숫자
+    autotext.set_fontsize(14)
+
+# 기저귀교환대 설치 여부
+wedges2, texts2, autotexts2 = axes[1].pie(
+    diaper_counts,
+    labels=diaper_labels,
+    autopct=make_autopct(14),
+    startangle=90,
+    colors=diaper_colors
+)
+axes[1].set_title('<기저귀교환대 설치 여부>', fontsize=17, pad=0)
+
+for text in texts2:
+    text.set_fontsize(12)
+for autotext in autotexts2:
+    autotext.set_fontsize(14)
+# plt.tight_layout(pad=3)
+# plt.show()
+
+'''
+※ 비상벨 설치 여부
+- 설치: 51.6% / 미설치: 48.4%
+- 절반 이상이 비상벨을 갖추고 있지만, 여전히 거의 절반 가까운 시설이 미설치 상태 → 긴급 상황 대응 인프라가 불충분하다는 신호
+- 특히 여성·노약자·아동 이용자에게 심리적 불안 요소가 될 수 있음
+
+※ 기저귀교환대 설치 여부
+- 설치: 25.6% / 미설치: 74.4%
+- 4곳 중 3곳 이상이 기저귀교환대를 갖추지 않음 → 영유아 동반 이용자에 대한 배려 부족
+- 가족 단위 외출 시 불편을 초래하고, 공공시설의 포용성이 떨어짐
+
+※ 종합 인사이트
+- 공중화장실의 안전성과 편의성 모두에서 시설 불균형이 존재하며,
+- 특히 기저귀교환대는 보급률이 매우 낮아 개선 우선순위로 고려될 필요가 있음.
+- 비상벨은 절반 이상 설치되어 있지만, 전면 확대 설치가 필요한 상황.
+'''
+
+
+# 설치 여부 컬럼 리스트
+install_cols = ['emergency_bell_installed', 'has_diaper_table', 'has_cctv']
+for col in install_cols:
+    df[col] = df[col].map({'Y': 1, 'N': 0}).fillna(0).astype(int)
+
+# 시설별 누락률 분석
+missing_summary = df[install_cols].apply(lambda x: (x == 0).sum())
+total_count = len(df)
+missing_rate = (missing_summary / total_count * 100).round(1)
+
+missing_df = pd.DataFrame({
+    '시설명': ['비상벨', '기저귀교환대', 'CCTV'],
+    '미설치 수': missing_summary.values,
+    '미설치율 (%)': missing_rate.values
+})
+print("시설별 누락률 분석 결과:")
+print(missing_df)
+
+# 비상벨 설치 장소 분석
+installed_bell = df[df['emergency_bell_installed'] == 1]
+location_counts = installed_bell['emergency_bell_location'].value_counts()
+location_df = location_counts.reset_index()
+location_df.columns = ['설치 장소', '설치 수']
+print("비상벨 설치 장소 분석 결과:")
+print(location_df)
+
+
+'''
+※ 시설별 누락률 분석 해석
+전체 공중화장실 중
+- 기저귀교환대는 74.4%가 미설치 (4곳 중 3곳 이상이 미설치)
+- CCTV는 68.4%가 미설치 (3곳 중 2곳 이상이 미설치)
+- 비상벨은 48.4%가 미설치 (절반 가까이 미설치 상태)
+
+→ 이는 특히 영유아 동반 이용자와 야간·취약계층 이용자에게 불편과 불안 요소를 유발할 수 있으며,
+  편의성과 안전성 모두에서 시설 보급률이 낮은 상황임을 보여준다.
+
+※ 비상벨 설치 장소 분석 해석
+비상벨이 설치된 4,831개소 중
+- 가장 많은 설치 유형은 남자화장실+여자화장실 (1,306개소)
+- 다음으로 장애인+남자+여자 복합 설치 (1,251개소)
+- 단독 설치는 여자화장실 (1,151개소), 장애인화장실 (296개소) 등으로 나타났다.
+
+→ 이는 비상벨이 여성·장애인 중심으로 설치되는 경향을 보여주며, 사회적 약자 보호 목적이 반영된 배치로 해석된다.
+하지만 남성화장실 단독 설치는 9개소에 불과해 모든 이용자를 포괄하는 균형 잡힌 안전 인프라 확대가 필요하다.
+🧩 복합 설치가 많지만, 남성 공간은 사각지대
+📌 여성·장애인 중심 설치는 긍정적이나, 남성·공용 공간도 보완 필요
+
+※ 보고서에 넣을 수 있는 요약 문구
+“기저귀교환대는 전체의 74.4%가 미설치 상태로, 공중화장실의 편의성 측면에서 가장 시급한 개선 대상이다.
+비상벨은 여성·장애인 공간에 집중 설치되어 있으나, 남성 공간은 설치 비율이 현저히 낮아 균형 있는 안전 인프라 확대가 필요하다.”
+'''
+
+'''
+📊 슬라이드용 요약 인포그래픽 문구
+
+🔴 시설 누락률 요약
+- 기저귀교환대: 74.4% 미설치 → 가장 시급한 개선 대상
+- CCTV: 68.4% 미설치 → 야간·취약계층 보호 부족
+- 비상벨: 48.4% 미설치 → 절반 가까이 미설치 상태
+
+🧩 설치 장소 분석 요약
+- 여성·장애인 화장실 중심 설치
+- 남성화장실 단독 설치는 9개소뿐
+→ 균형 잡힌 안전 인프라 확대 필요
+
+
+✍️ 보고서 결론 정리 문단
+본 분석을 통해 서울·부산·제주의 공중화장실은 접근성과 안전성 측면에서 시설 보급률의 불균형이 존재함을 확인하였다.
+특히 기저귀교환대는 전체의 74.4%가 미설치 상태로, 영유아 동반 이용자에 대한 배려가 부족한 상황이다.
+비상벨은 여성·장애인 공간에 집중 설치되어 있으나, 남성 및 공용 공간은 사각지대로 남아 있어 전면적이고 균형 잡힌 안전 인프라 확대가 필요하다.
+
+이에 따라 향후 정책 제안으로는
+- 사회적 약자 중심의 편의시설 확대
+- 야간·취약계층 보호를 위한 CCTV 및 비상벨 설치 강화
+- 시설 설치 기준의 지역별 표준화 를 제시하며,
+후속 연구로는 민원 데이터 연계 분석과 이용자 만족도 기반 정성적 평가가 필요하다.
 '''
