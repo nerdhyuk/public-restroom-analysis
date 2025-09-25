@@ -78,7 +78,6 @@ jeju_stats = df_jeju_filtered[['accessibility_score', 'safety_score']].mean()
 
 ## 지역별 평균 점수 비교
 region_summary = df.groupby('region')[['accessibility_score', 'safety_score']].mean().round(2)
-
 # print(region_summary)
 
 
