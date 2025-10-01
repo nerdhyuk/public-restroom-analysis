@@ -2,6 +2,8 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import re
+import folium
+from folium.plugins import MarkerCluster
 import warnings
 
 warnings.simplefilter("ignore")
@@ -14,13 +16,15 @@ seoul_df = pd.read_excel(path + '서울_공중화장실정보.xlsx')
 busan_df = pd.read_excel(path + '부산_공중화장실정보.xlsx')
 jeju_df = pd.read_excel(path + '제주도_공중화장실정보.xlsx')
 
+# 데이터 구조 확인
+# seoul_df.info()
+
 
 # 주소 통합 (도로명 + 지번 주소)
 def combine_address(row):
     road = str(row.get('address_road', '')).strip()
     lot = str(row.get('address_lot', '')).strip()
     return f"{road} {lot}".strip()
-
 
 # 컬럼명 영문화
 rename_dict = {
@@ -169,14 +173,6 @@ region_colors = {
 # plt.show()
 
 
-# 접근성 점수 0인 지점 확인
-district_summary = (
-    df.groupby(['region', 'district'], dropna=False)[['accessibility_score', 'safety_score']]
-    .mean()
-    .round(2)
-    .reset_index()
-)
-
 # 통합 주소 누락 제거
 df = df[df['full_address'].notna()]
 
@@ -192,35 +188,33 @@ zero_access_all_sorted = zero_access_all.sort_values(by='safety_score').reset_in
 # print(zero_access_all_sorted[['region', 'district', 'full_address', 'accessibility_score', 'safety_score']].head(20))
 
 # 접근성 점수 0인 지점의 안전성 점수 데이터
-scores = zero_access_all['safety_score']
+df_zero_access = df[df['accessibility_score'] == 0]
+# print(df_zero_access['safety_score'].value_counts())
 
-# 실제 존재하는 안전성 점수만 추출
-unique_scores = [0, 1, 2]
-counts = [len(scores[scores == s]) for s in unique_scores]
+# 안전성 점수 분포 집계
+score_counts = df_zero_access['safety_score'].value_counts().sort_index()
 
 
 ''' 시각화 '''
-colors = ['#FF6347', '#4682B4', '#53B9A9']
-
+# scores = score_counts.index.tolist()
+# counts = score_counts.values.tolist()
+# def get_score_color(score):
+#     color_map = {
+#         0: '#FF6347',
+#         1: '#53B9A9',
+#         2: '#4682B4',
+#         3: '#9370DB'
+#     }
+#     return color_map.get(score, '#999999')  # 예외 처리용
+#
 # # 그래프 그리기
 # plt.figure(figsize=(10, 6))
-# for i, (count, score) in enumerate(zip(counts, unique_scores)):
-#     plt.bar(
-#         x=i,
-#         height=count,
-#         color=colors[i],
-#     )
-#     # 막대 위 숫자 표시
-#     plt.text(
-#         i,
-#         count + 10,
-#         str(count),
-#         ha='center',
-#         va='bottom',
-#         fontsize=10
-#     )
-# # x축 눈금과 라벨 설정
-# plt.xticks(ticks=range(len(unique_scores)), labels=[str(int(s)) for s in unique_scores], fontsize=11)
+# for i, (score, count) in enumerate(zip(scores, counts)):
+#     plt.bar(x=i, height=count, color=get_score_color(score))
+#     plt.text(i, count + 10, str(count), ha='center', va='bottom', fontsize=10)
+#
+# # 축 설정
+# plt.xticks(ticks=range(len(scores)), labels=[str(score) for score in scores], fontsize=11)
 # plt.yticks(fontsize=11)
 # plt.xlabel('<안전성 점수>', fontsize=12)
 # plt.ylabel('<공중화장실 수>', fontsize=12)
@@ -232,39 +226,53 @@ colors = ['#FF6347', '#4682B4', '#53B9A9']
 '''
 ※ 그래프 해석
 1. 첫 번째 막대 (안전성 점수 0)
-    → 2333개 지점은 접근성도 없고 안전성도 없음
-    → 매우 위험한 상태
+- 2,233개 지점은 접근성도 없고 안전성도 없음
+- 여전히 가장 위험한 상태
+- 기본적인 인권과 안전이 동시에 결핍된 공간
 
 2. 두 번째 막대 (안전성 점수 1)
-    → 1053개 지점은 접근성은 없지만 안전성은 일부 갖춤
-    → 개선 여지는 있지만 여전히 취약
+- 1,053개 지점은 접근성은 없지만 안전성은 일부 갖춤
+- 취약하지만 개선 여지 있음
+- 최소한의 안전시설이 존재할 가능성
 
 3. 세 번째 막대 (안전성 점수 2)
-    → 접근성 점수가 0인 공중화장실 중에서 안전성 점수가 2점 이상인 곳이 하나도 없다는 것은 단순한 우연이 아니라,
-      구조적인 문제와 정책적 사각지대가 존재한다는 강력한 신호
+- 1,060개 지점은 접근성은 없지만 안전성은 상대적으로 확보됨
+- 이는 시설 개선이 부분적으로 이루어지고 있다는 증거
+- 접근성은 미비하지만 CCTV, 비상벨 등은 설치된 사례가 존재
+
+4. 네 번째 막대 (안전성 점수 3)
+- 271개 지점은 접근성은 없지만 안전성은 높음
+- 예외적이지만 긍정적인 사례
+- 안전 중심의 개선이 먼저 이루어진 곳일 가능성
 
 ※ 이 현상이 의미하는 것
-1. 접근성과 안전성은 함께 결핍되는 경향이 있다
-- 접근성 점수가 0이라는 건 장애인 화장실, 기저귀 교환대가 전혀 없다는 뜻
-- 그런데 안전성 점수도 2점 이상이 없다는 건 → CCTV, 비상벨, 안전시설도 거의 없다는 것
-- 즉, 기본적인 인권과 안전이 동시에 무시된 공간이라는 뜻
+1. 접근성과 안전성은 완전히 함께 결핍되지는 않는다
+- 접근성은 없지만 안전성은 확보된 지점이 상당수 존재
 
-2. 시설 개선이 단편적으로 이뤄지고 있다
-- 일부 화장실은 접근성은 없지만 안전성은 높을 수도 있어야 하는데
-- 그런 사례가 전혀 없다는 건 → 시설 개선이 종합적이지 않고, 한쪽만 개선되거나 아예 방치된 경우가 많다는 것
+2. 시설 개선이 부분적으로 이루어지고 있다
+- 안전성 점수가 2점 이상인 지점이 1,300개 이상 존재
+- 이는 안전 중심의 개선이 먼저 이루어진 정책 흐름을 반영할 수 있음
 
-3. 정책 우선순위 설정에 활용 가능
-- 접근성 0 + 안전성 ≤ 1인 지점은 이중 취약 지점
-- 이런 곳부터 우선적으로 개선해야 예산 대비 효과가 크고 → 시민 체감도도 높아질 수 있다
+3. 정책 우선순위 설정이 더 정교해질 수 있다
+- 단순히 접근성 0 + 안전성 ≤ 1만 보는 게 아니라 접근성 0 + 안전성 2~3인 지점은 접근성 중심 개선 대상으로 분류 가능
+- 반대로 접근성 0 + 안전성 0~1인 지점은 이중 취약 지점으로 우선 개선 필요
+
 
 ※ 이 표가 주는 인사이트
 - 접근성 0인 지점에 안전성 2점이 하나도 없다는 건 가장 취약한 공중화장실들이 안전조차 확보되지 않았다는 구조적 문제를 보여주는 인사이트
 - 접근성과 안전성 모두 부족한 지점이 전체적으로 많다 → 시설 개선이 시급한 지점들이 많다는 뜻
 - 우선 개선 대상 지역을 선정할 수 있는 근거 자료 → 지자체나 구청에 정책 제안할 때 활용 가능
+
+📌 정책 제안에 활용할 수 있는 메시지
+- “접근성 점수가 0인 지점 중에서도 안전성 점수가 높은 사례가 존재한다는 것은, 
+시설 개선이 안전 중심으로 먼저 이루어졌다는 흐름을 보여줍니다.
+이제는 접근성 중심의 개선이 병행되어야 할 시점입니다.”
+- “접근성과 안전성 모두 결핍된 지점은 여전히 3,000개 이상 존재하며, 
+이중 취약 지점에 대한 우선 개선이 시민 체감도를 높이는 핵심 전략이 될 수 있습니다.”
 '''
 
 
-# 서울/부산 위험 지점 추출
+# 서울/부산 위험지점 추출
 metro_risk = df[
     (df['region'].isin(['서울', '부산'])) &
     (df['accessibility_score'] == 0) &
@@ -510,4 +518,225 @@ location_df.columns = ['설치 장소', '설치 수']
 - 야간·취약계층 보호를 위한 CCTV 및 비상벨 설치 강화
 - 시설 설치 기준의 지역별 표준화 를 제시하며,
 후속 연구로는 민원 데이터 연계 분석과 이용자 만족도 기반 정성적 평가가 필요하다.
+'''
+
+
+
+### 전체 데이터 갯수 vs 매핑 누락 데이터
+## 위도/경도 누락된 데이터값이 많음
+# 1. 좌표 기반 지역 분류 함수
+def classify_region_by_latlon(lat, lon):
+    if 33 < lat < 34.5 and 126 < lon < 127.2:
+        return '제주도'
+    elif 34.8 < lat < 35.4 and 128.8 < lon < 129.3:
+        return '부산'
+    elif 37.4 < lat < 37.7 and 126.8 < lon < 127.2:
+        return '서울'
+    else:
+        return '기타'
+
+# 2. 전체 데이터 지역별 개수 (주소 기반)
+region_counts_total = df['region'].value_counts()[['서울', '부산', '제주도']]
+
+# 3. 좌표 기반 지역 분류 및 정제
+df_map = df.dropna(subset=['latitude', 'longitude']).copy()
+df_map['region_by_coord'] = df_map.apply(lambda row: classify_region_by_latlon(row['latitude'], row['longitude']), axis=1)
+
+# 4. 주소 기반 지역과 좌표 기반 지역이 일치하는 지점만 필터링
+df_matched = df_map[df_map['region'] == df_map['region_by_coord']].copy()
+
+# 5. 매핑된 지역별 개수
+region_counts_mapped = df_matched['region'].value_counts()[['서울', '부산', '제주도']]
+
+# 6. 차이 계산
+region_diff = region_counts_total - region_counts_mapped
+
+# 7. 결과 출력
+# print("📊 지역별 전체 화장실 수 (주소 기반):")
+# print(region_counts_total)
+# print("\n📍 좌표 기반으로 매핑된 화장실 수:")
+# print(region_counts_mapped)
+# print("\n⚠️ 매핑되지 못한 수량 (누락 또는 오류):")
+# print(region_diff)
+
+
+## folium 작업
+# 1. 좌표 기반 지역 분류 함수 (위도 + 경도 기준으로 정밀하게)
+def classify_region_by_latlon(lat, lon):
+    if 33 < lat < 34.5 and 126 < lon < 127.2:
+        return '제주도'
+    elif 34.8 < lat < 35.4 and 128.8 < lon < 129.3:
+        return '부산'
+    elif 37.4 < lat < 37.7 and 126.8 < lon < 127.2:
+        return '서울'
+    else:
+        return '기타'
+
+# 2. 지도용 데이터 정리
+df_map = df.dropna(subset=['latitude', 'longitude']).copy()
+
+# 좌표 기반 지역명 생성
+df_map['region_by_coord'] = df_map.apply(lambda row: classify_region_by_latlon(row['latitude'], row['longitude']), axis=1)
+
+# 주소 기반 지역은 유지하고, 좌표 기반 지역과 비교
+df_clean = df_map[df_map['region'] == df_map['region_by_coord']].copy()
+
+# 오류 좌표 제거: 주소 기반 지역과 좌표 기반 지역이 다른 지점 제외
+df_map = df_map[df_map['region'] == df_map['region_by_coord']]
+
+# 3. 지도 생성
+restroom_map = folium.Map(location=[36.0, 127.5], zoom_start=7)
+marker_cluster = MarkerCluster().add_to(restroom_map)
+
+# 4. 색상 함수 (접근성 점수 기준)
+def get_color(score):
+    if score >= 3:
+        return 'green'
+    elif score >= 2:
+        return 'orange'
+    else:
+        return 'red'
+
+# 5. 마커 생성
+for _, row in df_map.iterrows():
+    lat = row['latitude']
+    lon = row['longitude']
+    acc = row['accessibility_score']
+    safe = row['safety_score']
+    name = row.get('toilet_name') or row.get('address_road', '주소 없음')
+    region = row.get('region_by_coord', '지역 없음')
+    district = row.get('district', '구 정보 없음')
+
+    address = row.get('full_address', '주소 없음')
+
+    popup_text = f"""
+    <b>{name}</b><br>
+    📍 {region} / {district}<br>
+    📫 주소: {address}<br>
+    🚻 접근성 점수: {acc}<br>
+    🛡️ 안전성 점수: {safe}
+    """
+
+    folium.CircleMarker(
+        location=[lat, lon],
+        radius=10 + acc,
+        color=get_color(acc),
+        fill=True,
+        fill_opacity=0.7,
+        popup=folium.Popup(popup_text, max_width=300)
+    ).add_to(marker_cluster)
+
+# 6. 지도 저장
+# restroom_map.save('restroom_map_clean.html')
+
+
+## 위험 지점 찾기
+# 1. 좌표 기반 지역 분류 함수 (정밀화)
+def classify_region_by_latlon(lat, lon):
+    if 33 < lat < 34.5 and 126 < lon < 127.2:
+        return '제주도'
+    elif 34.8 < lat < 35.4 and 128.8 < lon < 129.3:
+        return '부산'
+    elif 37.4 < lat < 37.7 and 126.8 < lon < 127.2:
+        return '서울'
+    else:
+        return '기타'
+
+# 2. 데이터 정제 및 점수 정리
+df_map = df.dropna(subset=['latitude', 'longitude']).copy()
+df_map['accessibility_score'] = df_map['accessibility_score'].astype(float)
+df_map['safety_score'] = df_map['safety_score'].astype(float)
+
+# 3. 좌표 기반 지역명 생성 및 덮어쓰기
+df_map['region_by_coord'] = df_map.apply(lambda row: classify_region_by_latlon(row['latitude'], row['longitude']), axis=1)
+
+# 4. 좌표 유효 범위 필터링
+valid_lat = (df_map['latitude'] > 33) & (df_map['latitude'] < 38)
+valid_lon = (df_map['longitude'] > 124) & (df_map['longitude'] < 132)
+df_map = df_map[valid_lat & valid_lon].copy()
+
+# 5. 지역 불일치 제거
+df_clean = df_map[df_map['region'] == df_map['region_by_coord']].copy()
+
+# 6. 위험 여부 컬럼 생성
+df_clean['is_risky'] = (df_clean['accessibility_score'] < 2.0) & (df_clean['safety_score'] < 1.5)
+
+# 6-1. 위험 유형 분류
+df_clean['risk_type'] = df_clean.apply(
+    lambda row: '접근성만 낮음' if row['accessibility_score'] < 2.0 and row['safety_score'] >= 1.5 else
+                '안전성만 낮음' if row['accessibility_score'] >= 2.0 and row['safety_score'] < 1.5 else
+                '둘 다 낮음' if row['is_risky'] else '양호',
+    axis=1
+)
+# print(df_clean['risk_type'].value_counts())
+
+# 6-2. 위험 유형별 개선 전략 추천
+def recommend_strategy(row):
+    if row['risk_type'] == '접근성만 낮음':
+        return '진입로 개선, 장애인 접근성 강화'
+    elif row['risk_type'] == '안전성만 낮음':
+        return '조명, CCTV, 주변 환경 정비'
+    elif row['risk_type'] == '둘 다 낮음':
+        return '종합 인프라 개선 필요'
+    else:
+        return '유지관리 중심'
+
+df_clean['recommendation'] = df_clean.apply(recommend_strategy, axis=1)
+
+# 7. 위험 지점 필터링
+risk_df = df_clean[df_clean['is_risky']].copy()
+
+# 접근성과 안전성이 모두 0.0인 지점만 추출
+critical_points = df_clean[
+    (df_clean['accessibility_score'] == 0.0) &
+    (df_clean['safety_score'] == 0.0)
+]
+
+# 8. 위험 비율 계산
+risk_ratio = df_clean.groupby('region_by_coord')['is_risky'].mean().round(3)
+risk_ratio = risk_ratio[risk_ratio.index != '기타']
+# print("지역별 위험 비율:")
+# print(risk_ratio)
+
+# 9-1. 위험 지점 지도 생성
+risk_map = folium.Map(location=[36.0, 127.5], zoom_start=7)
+risk_cluster = MarkerCluster().add_to(risk_map)
+
+for _, row in risk_df.iterrows():
+    name = row.get('toilet_name') or row.get('address_road', '주소 없음')
+    region = row.get('region_by_coord', '지역 없음')
+    district = row.get('district', '구 정보 없음')
+    acc = row['accessibility_score']
+    safe = row['safety_score']
+    strategy = row.get('recommendation', '전략 없음')  # 전략 팝업에 추가
+
+    popup_text = f"""
+    <b>{name}</b><br>
+    📍 {region} / {district}<br>
+    🚻 접근성 점수: {acc}<br>
+    🛡️ 안전성 점수: {safe}<br>
+    🛠️ 개선 전략: {strategy}
+    """
+
+    folium.Marker(
+        location=[row['latitude'], row['longitude']],
+        popup=folium.Popup(popup_text, max_width=300),
+        icon=folium.Icon(color='red', icon='exclamation-sign')
+    ).add_to(risk_cluster)
+
+# 지도 저장
+risk_map.save('risk_restroom_map.html')
+
+
+'''
+📌 분석 요약
+- 위도/경도 기반 매핑은 시각적으로 유의미한 부분적 인사이트를 제공하지만
+- 서울·제주도 등 주요 지역에서 좌표 누락률이 너무 높아
+- 전체 데이터를 대표하거나 정책적 결론을 도출하기엔 한계가 있음
+
+따라서
+“본 지도 시각화는 위도·경도 정보를 기반으로 한 부분적 분석이며,
+서울과 제주도 지역의 좌표 누락률이 높아 전체 흐름을 반영하기엔 제한적입니다.
+따라서 지도는 공간적 경향 파악용으로 활용하고,
+전체 분석은 주소 기반 통계와 병행하여 해석하는 것이 필요합니다.”
 '''
