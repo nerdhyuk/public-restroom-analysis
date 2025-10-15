@@ -670,6 +670,10 @@ for (lat, lon), rows in grouped.items():
 # restroom_map.save('restroom_map_clean.html')
 
 
+# print("중간 매핑 마커 수:", len(df_map))  # 전체 화장실 수
+# print("최종본 마커 수:", len(grouped))  # 좌표 기준으로 묶인 마커 수
+
+
 ## 위험 지점 찾기
 # 1. 좌표 기반 지역 분류 함수 (정밀화)
 def classify_region_by_latlon(lat, lon):
