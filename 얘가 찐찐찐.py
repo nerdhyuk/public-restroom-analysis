@@ -4,6 +4,7 @@ import seaborn as sns
 import re
 import folium
 from folium.plugins import MarkerCluster
+from collections import defaultdict
 import warnings
 
 warnings.simplefilter("ignore")
@@ -28,6 +29,7 @@ def combine_address(row):
 
 # 컬럼명 영문화
 rename_dict = {
+    '화장실명': 'toilet_name',
     # 접근성 관련
     '남성용-장애인용대변기수': 'male_disabled_toilet_count',
     '여성용-장애인용대변기수': 'female_disabled_toilet_count',
@@ -83,6 +85,19 @@ jeju_stats = df_jeju_filtered[['accessibility_score', 'safety_score']].mean()
 ## 지역별 평균 점수 비교
 region_summary = df.groupby('region')[['accessibility_score', 'safety_score']].mean().round(2)
 # print(region_summary)
+
+
+'''
+        accessibility_score  safety_score
+region                                   
+부산                     1.24          0.77
+서울                     1.33          1.36
+제주도                    1.33          1.78
+
+- 제주도는 비상벨, CCTV, 안전관리시설 설치 비율이 높아 안전성 지표가 가장 우수함.
+- 부산은 접근성 점수가 낮은 편이고, 특히 안전성 점수가 가장 낮아 개선이 시급함.
+- 서울은 두 지표 모두 고르게 높아 균형 잡힌 인프라를 갖추고 있음.
+'''
 
 
 # '구' 추출 함수 (서울/부산)
@@ -259,7 +274,6 @@ score_counts = df_zero_access['safety_score'].value_counts().sort_index()
 
 
 ※ 이 표가 주는 인사이트
-- 접근성 0인 지점에 안전성 2점이 하나도 없다는 건 가장 취약한 공중화장실들이 안전조차 확보되지 않았다는 구조적 문제를 보여주는 인사이트
 - 접근성과 안전성 모두 부족한 지점이 전체적으로 많다 → 시설 개선이 시급한 지점들이 많다는 뜻
 - 우선 개선 대상 지역을 선정할 수 있는 근거 자료 → 지자체나 구청에 정책 제안할 때 활용 가능
 
@@ -584,6 +598,11 @@ df_clean = df_map[df_map['region'] == df_map['region_by_coord']].copy()
 # 오류 좌표 제거: 주소 기반 지역과 좌표 기반 지역이 다른 지점 제외
 df_map = df_map[df_map['region'] == df_map['region_by_coord']]
 
+# 중복 좌표수 확인 (451개)
+duplicate_coords = df_map.groupby(['latitude', 'longitude']).size()
+duplicate_coords = duplicate_coords[duplicate_coords > 1]
+# print("중복 좌표 수:", len(duplicate_coords))
+
 # 3. 지도 생성
 restroom_map = folium.Map(location=[36.0, 127.5], zoom_start=7)
 marker_cluster = MarkerCluster().add_to(restroom_map)
@@ -597,33 +616,54 @@ def get_color(score):
     else:
         return 'red'
 
-# 5. 마커 생성
+# 5. 좌표 기준으로 그룹핑 (중복 위치 통합)
+grouped = defaultdict(list)
 for _, row in df_map.iterrows():
-    lat = row['latitude']
-    lon = row['longitude']
-    acc = row['accessibility_score']
-    safe = row['safety_score']
-    name = row.get('toilet_name') or row.get('address_road', '주소 없음')
-    region = row.get('region_by_coord', '지역 없음')
-    district = row.get('district', '구 정보 없음')
+    key = (row['latitude'], row['longitude'])
+    grouped[key].append(row)
 
-    address = row.get('full_address', '주소 없음')
+# 6. 마커 생성
+for (lat, lon), rows in grouped.items():
+    popup_entries = []
 
-    popup_text = f"""
-    <b>{name}</b><br>
-    📍 {region} / {district}<br>
-    📫 주소: {address}<br>
-    🚻 접근성 점수: {acc}<br>
-    🛡️ 안전성 점수: {safe}
+    for row in rows:
+        name = row.get('toilet_name') or row.get('address_road', '주소 없음')
+        region = row.get('region_by_coord', '지역 없음')
+        district = row.get('district', '구 정보 없음')
+        address = row.get('full_address', '주소 없음')
+        acc = row.get('accessibility_score', 0)
+        safe = row.get('safety_score', 0)
+
+        entry = f"""
+        <b>{name}</b><br>
+        📍 {region} / {district}<br>
+        📫 주소: {address}<br>
+        🚻 접근성 점수: {acc:.1f}<br>
+        🛡️ 안전성 점수: {safe:.1f}<br><hr>
+        """
+        popup_entries.append(entry)
+
+    popup_text = "".join(popup_entries)
+
+    # 평균 접근성 점수로 색상 결정
+    avg_acc = sum([r.get('accessibility_score', 0) for r in rows]) / len(rows)
+    color = get_color(avg_acc)
+
+    popup_text = "".join(popup_entries)
+
+    popup_html = f"""
+    <div style="max-height:300px; overflow-y:auto;">
+    {popup_text}
+    </div>
     """
 
     folium.CircleMarker(
         location=[lat, lon],
-        radius=10 + acc,
-        color=get_color(acc),
+        radius=6 + len(rows) * 2,
+        color=color,
         fill=True,
         fill_opacity=0.7,
-        popup=folium.Popup(popup_text, max_width=300)
+        popup=folium.Popup(popup_html, max_width=350)
     ).add_to(marker_cluster)
 
 # 6. 지도 저장
@@ -698,34 +738,58 @@ risk_ratio = risk_ratio[risk_ratio.index != '기타']
 # print("지역별 위험 비율:")
 # print(risk_ratio)
 
-# 9-1. 위험 지점 지도 생성
+# 9. 위험 지점 지도 생성
 risk_map = folium.Map(location=[36.0, 127.5], zoom_start=7)
 risk_cluster = MarkerCluster().add_to(risk_map)
 
+grouped = defaultdict(list)
 for _, row in risk_df.iterrows():
-    name = row.get('toilet_name') or row.get('address_road', '주소 없음')
-    region = row.get('region_by_coord', '지역 없음')
-    district = row.get('district', '구 정보 없음')
-    acc = row['accessibility_score']
-    safe = row['safety_score']
-    strategy = row.get('recommendation', '전략 없음')  # 전략 팝업에 추가
+    key = (row['latitude'], row['longitude'])
+    grouped[key].append(row)
 
-    popup_text = f"""
-    <b>{name}</b><br>
-    📍 {region} / {district}<br>
-    🚻 접근성 점수: {acc}<br>
-    🛡️ 안전성 점수: {safe}<br>
-    🛠️ 개선 전략: {strategy}
+# 10.마커 생성
+for (lat, lon), rows in grouped.items():
+    seen_names = set()
+    popup_entries = []
+
+    for row in rows:
+        name = row.get('toilet_name') or row.get('address_road', '이름 없음')
+        if name in seen_names:
+            continue  # 이미 본 이름이면 건너뛰기
+        seen_names.add(name)
+
+        region = row.get('region_by_coord', '지역 없음')
+        district = row.get('district', '구 정보 없음')
+        acc = row['accessibility_score']
+        safe = row['safety_score']
+        strategy = row.get('recommendation', '전략 없음')
+
+        entry = f"""
+        <b>🚻 {name}</b><br>
+        📍 지역: {region} / {district}<br>
+        📫 주소: {row.get('full_address', '주소 없음')}<br>
+        🧭 접근성 점수: {acc:.1f}<br>
+        🛡️ 안전성 점수: {safe:.1f}<br>
+        🛠️ 개선 전략: {strategy}<br><hr>
+        """
+        popup_entries.append(entry)
+
+    popup_text = "".join(popup_entries)
+
+    popup_html = f"""
+    <div style="max-height:300px; overflow-y:auto;">
+    {popup_text}
+    </div>
     """
 
     folium.Marker(
-        location=[row['latitude'], row['longitude']],
-        popup=folium.Popup(popup_text, max_width=300),
+        location=[lat, lon],
+        popup=folium.Popup(popup_html, max_width=350),
         icon=folium.Icon(color='red', icon='exclamation-sign')
     ).add_to(risk_cluster)
 
-# 지도 저장
-risk_map.save('risk_restroom_map.html')
+# 11.지도 저장
+# risk_map.save('risk_restroom_map.html')
 
 
 '''
