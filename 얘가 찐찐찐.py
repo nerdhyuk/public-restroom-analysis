@@ -68,6 +68,27 @@ df['safety_facility'] = df['safety_facility_required'].apply(lambda x: 1 if str(
 df['accessibility_score'] = df['disabled_toilet'] + df['diaper_table']
 df['safety_score'] = df['emergency_bell'] + df['cctv'] + df['safety_facility']
 
+# 안전관리시설 설치 대상(Y)인데 실제로 안전시설이 없는 지점 필터링
+missing_safety_facilities = df[
+    (df['safety_facility_required'].astype(str).str.strip() == 'Y') &
+    ((df['emergency_bell'] == 0) | (df['cctv'] == 0))
+]
+
+# 중복 주소 제거
+missing_safety_facilities.drop_duplicates(subset='full_address', inplace=True)
+
+# 지역별 누락 지점 수 집계
+missing_summary = missing_safety_facilities.groupby('region').size().reset_index(name='누락 지점 수')
+
+# 안전시설이 누락된 지점 수
+# print(f"설치 대상인데 안전시설이 누락된 지점 수 : {len(missing_safety_facilities)}")
+# print(missing_summary)
+
+# 안전시설 지도 누락 수
+missing_safety_facilities_with_coords = missing_safety_facilities.dropna(subset=['latitude', 'longitude'])
+# print(f"지도에 표시 가능한 누락 지점 수: {len(missing_safety_facilities_with_coords)}")
+
+
 # 지역 분류 (서울/부산)
 df['district'] = df['full_address'].str.extract(r'([가-힣]+구)')
 
@@ -588,6 +609,11 @@ def classify_region_by_latlon(lat, lon):
 
 # 2. 지도용 데이터 정리
 df_map = df.dropna(subset=['latitude', 'longitude']).copy()
+df_map['accessibility_score'] = (
+    (df_map['disabled_toilet'] > 0).astype(int) +
+    (df_map['diaper_table'] == 'Y').astype(int)
+)
+df_map['safety_score'] = df_map['emergency_bell'] + df_map['cctv'] + df_map['safety_facility']
 
 # 좌표 기반 지역명 생성
 df_map['region_by_coord'] = df_map.apply(lambda row: classify_region_by_latlon(row['latitude'], row['longitude']), axis=1)
@@ -634,12 +660,35 @@ for (lat, lon), rows in grouped.items():
         acc = row.get('accessibility_score', 0)
         safe = row.get('safety_score', 0)
 
+        # 안전시설 누락 여부 확인
+        is_missing = (
+                str(row.get('safety_facility_required', '')).strip() == 'Y' and
+                (row.get('emergency_bell', 0) == 0 or row.get('cctv', 0) == 0)
+        )
+
+        # 누락 상세 설명
+        missing_details = ""
+        if is_missing:
+            bell_missing = row.get('emergency_bell', 0) == 0
+            cctv_missing = row.get('cctv', 0) == 0
+
+            missing_items = []
+            if bell_missing:
+                missing_items.append("비상벨 없음")
+            if cctv_missing:
+                missing_items.append("CCTV 없음")
+
+            missing_details = f"⚠️ <b>안전시설 누락</b> ({', '.join(missing_items)})"
+
+        # 팝업 텍스트 구성
         entry = f"""
         <b>{name}</b><br>
         📍 {region} / {district}<br>
         📫 주소: {address}<br>
         🚻 접근성 점수: {acc:.1f}<br>
-        🛡️ 안전성 점수: {safe:.1f}<br><hr>
+        🛡️ 안전성 점수: {safe:.1f}<br>
+        {missing_details}<br>
+        <hr>
         """
         popup_entries.append(entry)
 
@@ -666,7 +715,7 @@ for (lat, lon), rows in grouped.items():
         popup=folium.Popup(popup_html, max_width=350)
     ).add_to(marker_cluster)
 
-# 6. 지도 저장
+# 7. 지도 저장
 # restroom_map.save('restroom_map_clean.html')
 
 
@@ -688,7 +737,10 @@ def classify_region_by_latlon(lat, lon):
 
 # 2. 데이터 정제 및 점수 정리
 df_map = df.dropna(subset=['latitude', 'longitude']).copy()
-df_map['accessibility_score'] = df_map['accessibility_score'].astype(float)
+df_map['accessibility_score'] = (
+    (df_map['disabled_toilet'] > 0).astype(int) +
+    (df_map['diaper_table'] == 1).astype(int)
+)
 df_map['safety_score'] = df_map['safety_score'].astype(float)
 
 # 3. 좌표 기반 지역명 생성 및 덮어쓰기
@@ -793,7 +845,7 @@ for (lat, lon), rows in grouped.items():
     ).add_to(risk_cluster)
 
 # 11.지도 저장
-# risk_map.save('risk_restroom_map.html')
+risk_map.save('risk_restroom_map.html')
 
 
 '''
